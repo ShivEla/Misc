@@ -1,0 +1,163 @@
+﻿1. Graph Creation
+A. Creating an Empty Graph
+* Syntax:
+Python
+import networkx as nx
+G = nx.Graph() # For an undirected graph
+* Undirected Graph: Edges have no direction.
+   * import networkx as nx
+   * G = nx.Graph()
+   * Directed Graph: Edges have a direction (A → B).
+   * G_dir = nx.DiGraph()
+B. Adding Nodes and Edges Manually
+   * Syntax:
+Python
+G.add_node(1) # Adds a single node '1'
+G.add_nodes_from([2, 3, 4]) # Adds multiple nodes from a list
+G.add_edge(1, 2) # Adds a single edge between nodes 1 and 2
+G.add_edges_from([(2, 3), (3, 4)]) # Adds multiple edges from a list of tuples
+      * Nodes:
+      * G.add_node(1)
+      * G.add_nodes_from([2, 3, 4])
+      * Edges:
+      * G.add_edge(1, 2)
+      * G.add_edges_from([(2, 3), (3, 4)])
+      * Weighted Edges: Edges with a numerical attribute (e.g., strength, distance).
+      * G.add_edge('A', 'B', weight=2.5)
+C. Creating a Graph from a File
+      * edgelist (.txt file): A text file where each line is node1 node2.
+      * Syntax:
+Python
+G = nx.read_edgelist('filename.txt')
+
+         * gml file: A more structured format that can hold attributes.
+         * Syntax:
+Python
+G = nx.read_gml('filename.gml', label='id')
+
+            * csv file (using pandas): For edge lists stored in a CSV.
+            * Syntax:
+Python
+import pandas as pd
+df = pd.read_csv('filename.csv')
+G = nx.from_pandas_edgelist(df, 'source_column_name', 'target_column_name')
+
+            * From an Edge List (.txt):
+               * G = nx.read_edgelist('filename.txt')
+               * For directed: G_dir = nx.read_edgelist('filename.txt', create_using=nx.DiGraph())
+               * From GML (.gml):
+               * G = nx.read_gml('filename.gml', label='id')
+               * From CSV (with pandas):
+               * import pandas as pd
+               * df = pd.read_csv('filename.csv')
+               * G = nx.from_pandas_edgelist(df, 'source_col', 'target_col')
+2. Standard Graph Models
+A. Erdős-Rényi (ER) - Random Network
+Every pair of nodes is connected with a probability p.
+               * Key Idea: Randomness.
+               * Syntax:
+Python
+n = 100 # number of nodes
+p = 0.06 # probability of edge creation
+G_er = nx.erdos_renyi_graph(n, p)
+B. Watts-Strogatz (WS) - Small-World Network
+High clustering like a regular lattice, but a short average path length like a random graph.
+                  * Key Idea: "Six degrees of separation," high local clustering.
+                  * Syntax:
+Python
+n = 100 # number of nodes
+k = 4 # number of nearest neighbors (must be even)
+p = 0.1 # rewiring probability
+G_ws = nx.watts_strogatz_graph(n, k, p)
+C. Barabási-Albert (BA) - Scale-Free Network
+Follows a power-law degree distribution. New nodes prefer to attach to existing "popular" nodes (hubs).
+                     * Key Idea: Hubs, "rich get richer" (preferential attachment).
+                     * Syntax:
+Python
+n = 100 # number of nodes
+m = 3 # number of edges for each new node
+G_sf = nx.barabasi_albert_graph(n, m)
+3. Graph Analysis & Metrics
+                        * Quick Summary: print(nx.info(G))
+                        * Number of Nodes: G.number_of_nodes()
+                        * Number of Edges: G.number_of_edges()
+                        * Density: How close the graph is to being complete.
+                        * density = nx.density(G)
+                        * Connectivity (Undirected):
+                        * is_connected = nx.is_connected(G)
+                        * num_components = nx.number_connected_components(G)
+                        * Connectivity (Directed):
+                        * is_strong = nx.is_strongly_connected(G_dir) (Path from every node to every other node)
+                        * is_weak = nx.is_weakly_connected(G_dir) (Connected if directions are ignored)
+                        * Average Shortest Path Length: Average steps between all node pairs.
+                        * Important: Requires a connected graph. Analyze the largest component if disconnected.
+                        * avg_path = nx.average_shortest_path_length(G_largest_component)
+                        * Diameter: The longest shortest path in the graph.
+                        * diameter = nx.diameter(G_largest_component)
+                        * Average Clustering Coefficient: The average tendency of nodes to form clusters.
+                        * avg_cluster = nx.average_clustering(G)
+                        * Critical Threshold: Measures network robustness (fraclanglek2ranglelanglekrangle).
+                        * degrees = [d for n, d in G.degree()]
+                        * k_avg = np.mean(degrees)
+                        * k2_avg = np.mean([d**2 for d in degrees])
+                        * threshold = k2_avg / k_avg
+A. Basic Properties
+                        * Number of Nodes: G.number_of_nodes() or len(G)
+                        * Number of Edges: G.number_of_edges() or G.size()
+                        * List of Nodes: G.nodes()
+                        * List of Edges: G.edges()
+B. Degree
+The number of connections a node has.
+                        * Degree of one node: G.degree(node_id)
+                        * Degrees of all nodes (as a dict-like object): G.degree()
+                        * Average Degree: Can be calculated as (2 * L) / N where L is edges and N is nodes.
+                        * Degree Distribution: A plot showing how many nodes have each degree.
+                        * Syntax (for plotting):
+Python
+import collections
+import matplotlib.pyplot as plt
+
+degree_sequence = [d for n, d in G.degree()]
+degree_count = collections.Counter(degree_sequence)
+deg, cnt = zip(*degree_count.items())
+
+# Linear plot
+plt.bar(deg, cnt)
+# Log-log plot (key for identifying scale-free networks)
+plt.loglog(deg, cnt, 'o')
+C. Average Shortest Path Length
+The average number of steps along the shortest paths for all possible pairs of network nodes. It indicates network efficiency.
+                           * Important: Only works on a connected graph.
+                           * Syntax:
+Python
+# First, check if connected
+if nx.is_connected(G):
+   avg_path = nx.average_shortest_path_length(G)
+else:
+   # If not, analyze the largest component
+   largest_cc = max(nx.connected_components(G), key=len)
+   avg_path = nx.average_shortest_path_length(G.subgraph(largest_cc))
+D. Clustering Coefficient
+Measures how connected a node's neighbors are to each other (tendency to form "cliques" or triangles). A value of 1 means all neighbors are connected.
+                              * For the whole graph (average): nx.average_clustering(G)
+                              * For a single node: nx.clustering(G, node_id)
+E. Critical Threshold (Network Robustness)
+Helps understand if a giant component will exist after random node failures.
+                              * Formula: fraclanglek2ranglelanglekrangle
+                              * Syntax:
+Python
+import numpy as np
+degrees = [d for n, d in G.degree()]
+k_avg = np.mean(degrees) # <k>
+k2_avg = np.mean([d**2 for d in degrees]) # <k^2>
+threshold = k2_avg / k_avg
+4. Plotting
+                                 * Basic Drawing:
+Python
+nx.draw(G, with_labels=True, node_color='skyblue', node_size=50)
+plt.show()
+                                 * Circular Layout (good for WS):
+Python
+pos = nx.circular_layout(G)
+nx.draw(G, pos, with_labels=True)
+plt.show()
