@@ -1,0 +1,246 @@
+# setup_pki.py (Recommended Minor Change)
+import os
+import shutil
+import subprocess
+import sys
+
+def run_command(command, shell=True):
+    """A simple helper to run shell commands and exit on error."""
+    try:
+        subprocess.run(command, shell=shell, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {command}\n{e.stderr.decode()}", file=sys.stderr)
+        sys.exit(1)
+
+print("--- Initializing Workspace ---")
+# "shared_network" is no longer needed, so it has been removed from this list.
+for dirname in ["CA", "Alice", "Bob"]:
+    if os.path.exists(dirname):
+        shutil.rmtree(dirname)
+    os.makedirs(dirname)
+print("✅ Workspace cleaned and directories created.\n")
+
+print("--- Pre-computation: Creating PKI ---")
+# Create CA
+print("[CA] Generating root key and self-signed certificate...")
+run_command("openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out CA/rootkey.pem")
+run_command('openssl req -x509 -new -nodes -key CA/rootkey.pem -sha256 -days 1024 -out CA/root.crt -subj "/C=IN/ST=TamilNadu/L=Coimbatore/O=MyCA/CN=myca.com"')
+
+# Create Alice's Certificate
+print("[ALICE] Generating key and signing request...")
+run_command("openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out Alice/privkey-A.pem")
+run_command('openssl req -new -key Alice/privkey-A.pem -out Alice/A-req.csr -subj "/C=IN/ST=TamilNadu/L=Coimbatore/O=AliceCorp/CN=alice.com"')
+print("[CA] Signing Alice's certificate...")
+run_command("openssl x509 -req -in Alice/A-req.csr -CA CA/root.crt -CAkey CA/rootkey.pem -CAcreateserial -out Alice/A.crt -days 500 -sha256")
+
+# Create Bob's Certificate
+print("[BOB] Generating key and signing request...")
+run_command("openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out Bob/privkey-B.pem")
+run_command('openssl req -new -key Bob/privkey-B.pem -out Bob/B-req.csr -subj "/C=IN/ST=TamilNadu/L=Coimbatore/O=BobCorp/CN=bob.com"')
+print("[CA] Signing Bob's certificate...")
+run_command("openssl x509 -req -in Bob/B-req.csr -CA CA/root.crt -CAkey CA/rootkey.pem -out Bob/B.crt -days 500 -sha256")
+
+print("\n✅ PKI setup complete. Ready to run client and server.")
+
+
+
+# alice_client.py
+import os
+import socket
+import struct
+import subprocess
+
+# --- Network Configuration ---
+HOST = 'localhost'
+PORT = 12345
+
+def run_command(command, shell=True, check=True, input_data=None):
+    """Helper to run shell commands, with optional stdin piping."""
+    subprocess.run(command, shell=shell, check=check, input=input_data, text=True)
+
+def send_file(sock, filepath):
+    """Sends a file over a socket by first sending its size."""
+    filesize = os.path.getsize(filepath)
+    print(f"📦 Sending {os.path.basename(filepath)} ({filesize} bytes)...")
+    sock.sendall(struct.pack('>Q', filesize))
+    with open(filepath, 'rb') as f:
+        while read_bytes := f.read(1024):
+            sock.sendall(read_bytes)
+    print(f"✔️ Sent {os.path.basename(filepath)}.")
+
+# --- MODIFIED FUNCTION START ---
+def receive_file(sock, save_path):
+    """Receives a file from a socket and saves it robustly."""
+    packed_size = sock.recv(struct.calcsize('>Q'))
+    if not packed_size:
+        return None
+    filesize = struct.unpack('>Q', packed_size)[0]
+    print(f"⏳ Receiving {os.path.basename(save_path)} ({filesize} bytes)...")
+
+    with open(save_path, 'wb') as f:
+        bytes_received = 0
+        while bytes_received < filesize:
+            # Calculate how many bytes we still need to receive
+            remaining = filesize - bytes_received
+            # Receive up to 1024 bytes, or the remaining amount if smaller
+            chunk = sock.recv(min(1024, remaining))
+            if not chunk:
+                break
+            f.write(chunk)
+            bytes_received += len(chunk)
+    print(f"✔️ Received and saved to {os.path.basename(save_path)}.")
+    return save_path
+# --- MODIFIED FUNCTION END ---
+
+def get_user_votes():
+    """Prompts the user to enter candidate names and votes."""
+    print("\n--- Enter Vote Data ---")
+    votes = []
+    while True:
+        candidate = input("Enter candidate name (or 'done' to finish): ")
+        if candidate.lower() == 'done':
+            break
+        while True:
+            try:
+                num_votes = int(input(f"Enter votes for {candidate}: "))
+                votes.append(f"{candidate},{num_votes}")
+                break
+            except ValueError:
+                print("Invalid input. Please enter a number for votes.")
+    return "\n".join(votes)
+
+print("--- Alice (Client) is running ---")
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    print(f"📞 Connecting to Bob at {HOST}:{PORT}...")
+    s.connect((HOST, PORT))
+    print("🤝 Connected to Bob.")
+
+    # Receive Bob's certificate
+    bob_cert = "Alice/B.crt"
+    receive_file(s, bob_cert)
+
+    # Action 2: Alice verifies Bob and prepares the secure package
+    print("\n[ALICE] Verifying Bob and preparing secure package...")
+    run_command(f"openssl verify -CAfile CA/root.crt {bob_cert}")
+    run_command("openssl rand -base64 32 > Alice/symkey.pem")
+    run_command(f"openssl x509 -pubkey -noout -in {bob_cert} > Alice/pubkey-B.pem")
+    run_command("openssl pkeyutl -encrypt -in Alice/symkey.pem -pubin -inkey Alice/pubkey-B.pem -out Alice/symkey.enc")
+    
+    print("[ALICE] Hashing and signing the symmetric key...")
+    run_command("openssl dgst -sha1 -binary -out Alice/hash.bin Alice/symkey.pem")
+    run_command("openssl pkeyutl -sign -in Alice/hash.bin -inkey Alice/privkey-A.pem -out Alice/signature.bin -pkeyopt digest:sha1")
+
+    # Action 3: Alice sends her certificate and the package
+    print("\n[ALICE] Sending certificate and encrypted key to Bob...")
+    send_file(s, "Alice/A.crt")
+    send_file(s, "Alice/symkey.enc")
+    send_file(s, "Alice/signature.bin")
+
+    # Action 5: Get user input and send encrypted data
+    vote_data_string = get_user_votes()
+    print("\n[ALICE] Encrypting your vote data and sending to Bob...")
+
+    encrypt_command = "openssl enc -aes-256-cbc -pass file:Alice/symkey.pem -out Alice/votes_ciphertext.bin"
+    run_command(encrypt_command, input_data=vote_data_string)
+
+    send_file(s, "Alice/votes_ciphertext.bin")
+    print("✅ Encrypted votes sent.")
+    print("🎉 Alice's mission complete.")
+
+
+# bob_server.py
+import os
+import socket
+import struct
+import subprocess
+
+# --- Network Configuration ---
+HOST = 'localhost'
+PORT = 12345
+
+def run_command(command, shell=True, check=True):
+    """Helper to run shell commands."""
+    subprocess.run(command, shell=shell, check=check)
+
+def send_file(sock, filepath):
+    """Sends a file over a socket by first sending its size."""
+    filesize = os.path.getsize(filepath)
+    print(f"📦 Sending {os.path.basename(filepath)} ({filesize} bytes)...")
+    sock.sendall(struct.pack('>Q', filesize))
+    with open(filepath, 'rb') as f:
+        while read_bytes := f.read(1024):
+            sock.sendall(read_bytes)
+    print(f"✔️ Sent {os.path.basename(filepath)}.")
+
+# --- MODIFIED FUNCTION START ---
+def receive_file(sock, save_path):
+    """Receives a file from a socket and saves it robustly."""
+    packed_size = sock.recv(struct.calcsize('>Q'))
+    if not packed_size:
+        return None
+    filesize = struct.unpack('>Q', packed_size)[0]
+    print(f"⏳ Receiving {os.path.basename(save_path)} ({filesize} bytes)...")
+
+    with open(save_path, 'wb') as f:
+        bytes_received = 0
+        while bytes_received < filesize:
+            # Calculate how many bytes we still need to receive
+            remaining = filesize - bytes_received
+            # Receive up to 1024 bytes, or the remaining amount if smaller
+            chunk = sock.recv(min(1024, remaining))
+            if not chunk:
+                break
+            f.write(chunk)
+            bytes_received += len(chunk)
+    print(f"✔️ Received and saved to {os.path.basename(save_path)}.")
+    return save_path
+# --- MODIFIED FUNCTION END ---
+
+
+print("--- Bob (Server) is running ---")
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind((HOST, PORT))
+    s.listen()
+    print(f"👂 Bob is listening on {HOST}:{PORT}")
+    conn, addr = s.accept()
+    with conn:
+        print(f"🤝 Connected by {addr}")
+
+        # Action 1: Bob sends his certificate
+        print("\n[BOB] Sending my certificate to Alice...")
+        send_file(conn, "Bob/B.crt")
+
+        # Wait for Alice's package
+        print("\n[BOB] Waiting for Alice's package...")
+        receive_file(conn, "Bob/A.crt")
+        receive_file(conn, "Bob/symkey.enc")
+        receive_file(conn, "Bob/signature.bin")
+
+        # Action 4: Bob verifies Alice and decrypts the key
+        print("\n[BOB] Received package. Verifying Alice and decrypting key...")
+        run_command("openssl verify -CAfile CA/root.crt Bob/A.crt")
+        run_command("openssl pkeyutl -decrypt -in Bob/symkey.enc -inkey Bob/privkey-B.pem -out Bob/symkey.pem")
+        run_command("openssl x509 -pubkey -noout -in Bob/A.crt > Bob/pubkey-A.pem")
+        
+        print("[BOB] Hashing symmetric key and verifying signature...")
+        run_command("openssl dgst -sha1 -binary -out Bob/hash.bin Bob/symkey.pem")
+        run_command("openssl pkeyutl -verify -in Bob/hash.bin -sigfile Bob/signature.bin -inkey Bob/pubkey-A.pem -pubin -pkeyopt digest:sha1")
+        
+        print("✅ Secure key exchange complete!")
+
+        # Wait for the encrypted data
+        print("\n[BOB] Waiting for encrypted vote data...")
+        receive_file(conn, "Bob/votes_ciphertext.bin")
+
+        # Action 6: Bob decrypts the data
+        print("\n[BOB] Received encrypted data. Decrypting...")
+        run_command("openssl enc -aes-256-cbc -d -pass file:Bob/symkey.pem -in Bob/votes_ciphertext.bin -out Bob/decrypted_votes.txt")
+        print("✅ Votes decrypted to Bob/decrypted_votes.txt")
+
+        print("\n--- DECRYPTED VOTE DATA ---")
+        with open("Bob/decrypted_votes.txt", "r") as f:
+            print(f.read())
+        print("--------------------------")
+        print("🎉 Bob's mission complete.")
